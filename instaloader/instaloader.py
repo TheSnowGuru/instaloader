@@ -136,6 +136,8 @@ class _ArbitraryItemFormatter(string.Formatter):
         return super().format_field(value, format_spec)
 
 
+
+
 class _PostPathFormatter(_ArbitraryItemFormatter):
     RESERVED: set = {'CON', 'PRN', 'AUX', 'NUL',
                      'COM1', 'COM2', 'COM3', 'COM4', 'COM5', 'COM6', 'COM7', 'COM8', 'COM9',
@@ -146,31 +148,20 @@ class _PostPathFormatter(_ArbitraryItemFormatter):
         self.force_windows_path = force_windows_path
 
     def get_value(self, key, args, kwargs):
-        ret = super().get_value(key, args, kwargs)
-        if not isinstance(ret, str):
-            return ret
-        return self.sanitize_path(ret, self.force_windows_path)
+        if key == 'filename' and isinstance(self._item, (Post, StoryItem, PostSidecarNode, TitlePic)):
+            return "{filename}"
+        if hasattr(self._item, key):
+            return getattr(self._item, key)
+        return super().get_value(key, args, kwargs)
 
-    @staticmethod
-    def sanitize_path(ret: str, force_windows_path: bool = False) -> str:
-        """Replaces '/' with similar looking Division Slash and some other illegal filename characters on Windows."""
-        ret = ret.replace('/', '\u2215')
-
-        if ret.startswith('.'):
-            ret = ret.replace('.', '\u2024', 1)
-
-        if force_windows_path or platform.system() == 'Windows':
-            ret = ret.replace(':', '\uff1a').replace('<', '\ufe64').replace('>', '\ufe65').replace('\"', '\uff02')
-            ret = ret.replace('\\', '\ufe68').replace('|', '\uff5c').replace('?', '\ufe16').replace('*', '\uff0a')
-            ret = ret.replace('\n', ' ').replace('\r', ' ')
-            root, ext = os.path.splitext(ret)
-            if root.upper() in _PostPathFormatter.RESERVED:
-                root += '_'
-            if ext == '.':
-                ext = '\u2024'
-            ret = root + ext
-        return ret
-
+    def format_field(self, value, format_spec):
+        if isinstance(value, datetime) and not format_spec:
+            return super().format_field(value, '%Y-%m-%d_%H-%M-%S')
+        if value is None:
+            return ''
+        if isinstance(value, str) and '404' in value:
+            print(f"[QueryReturnedNotFoundException] {value}")
+        return super().format_field(value, format_spec)
 
 class Instaloader:
     """Instaloader Class.
@@ -335,6 +326,7 @@ class Instaloader:
                      filename_suffix: Optional[str] = None, _attempt: int = 1) -> bool:
         """Downloads and saves picture with given url under given directory with given timestamp.
         Returns true, if file was actually downloaded, i.e. updated."""
+        print('Downloading picture from URL:', url)  # print the full URL that is being scraped
         if filename_suffix is not None:
             filename += '_' + filename_suffix
         urlmatch = re.search('\\.[a-z0-9]*\\?', url)
@@ -583,6 +575,13 @@ class Instaloader:
         """Downloads and saves the profile picture of a Hashtag.
 
         .. versionadded:: 4.4"""
+        url = hashtag.profile_pic_url
+        if '?' not in url:
+            url += '?'
+        elif '=' not in url.split('?')[-1]:
+            url += '&'
+        url += 'img_index=1'
+        self.download_title_pic(url, '#' + hashtag.name, 'profile_pic', None)
         self.download_title_pic(hashtag.profile_pic_url, '#' + hashtag.name, 'profile_pic', None)
 
     @_requires_login
@@ -694,6 +693,7 @@ class Instaloader:
                 return False
             else:
                 self.context.log(path + ' exists', end=' ', flush=True)
+                self.context.log('(url: ' + url() + ')', end=' ', flush=True)
                 return True
 
         def _all_already_downloaded(path_base, is_videos_enumerated) -> bool:
@@ -1240,9 +1240,12 @@ class Instaloader:
         target = "#" + hashtag.name
         if profile_pic:
             with self.context.error_catcher("Download profile picture of {}".format(target)):
-                self.download_hashtag_profilepic(hashtag)
+                url = hashtag.profile_pic_url + '/?img_index=1'
+                self.download_title_pic(url, target, 'profile_pic', None)
         if posts:
             self.context.log("Retrieving pictures with hashtag #{}...".format(hashtag.name))
+            url = "https://www.instagram.com/explore/tags/" + hashtag.name
+            self.context.log("Scraping {}...".format(url))
             self.posts_download_loop(hashtag.get_posts_resumable(), target, fast_update, post_filter,
                                      max_count=max_count)
         if self.save_metadata:
